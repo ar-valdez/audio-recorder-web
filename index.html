@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Audio Recorder — WAV Only (Global Counter)</title>
+<meta name="description" content="Record audio as WAV only. Filenames include gender and age; server enforces a global counter. Upload to Google Drive via Apps Script." />
+<link rel="icon" href="data:,">
+<style>
+  :root { --w: 880px; }
+  html,body { height: 100%; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 2.5rem 1rem; display: grid; place-items: start center; background: #fafafa; color:#111; }
+  main { width: min(var(--w), 100%); background: white; border: 1px solid #e5e5e5; border-radius: 12px;
+         padding: 1.25rem 1.25rem 1.5rem; box-shadow: 0 4px 30px rgba(0,0,0,.04); }
+  h1 { margin: .25rem 0 .25rem; font-size: clamp(1.2rem, 1.1rem + 1.2vw, 1.9rem); }
+  p.lead { margin: 0 0 .75rem; color:#4b5563; }
+  .row { display:flex; align-items:center; gap:.6rem; margin:.75rem 0; flex-wrap:wrap; }
+  .col { display:flex; flex-direction:column; gap:.6rem; }
+  button, .button { appearance: none; border: 0; background:#1f6feb; color:white; padding:.6rem .95rem;
+                    border-radius:8px; font-weight:600; cursor:pointer; text-decoration:none; }
+  button.secondary { background:#6b7280; }
+  button[disabled], .button[aria-disabled="true"] { opacity:.55; cursor:not-allowed; }
+  #status { font-weight:600; }
+  #meter { width: 320px; height: 12px; background:#eee; border-radius: 6px; overflow:hidden; border:1px solid #ddd; }
+  #bar { height: 100%; width: 0%; background:#4a90e2; }
+  audio { width: 100%; }
+  .pill { font: 12px/1.8 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; padding:.1rem .5rem;
+          border:1px solid #e5e7eb; border-radius:999px; color:#374151;}
+  .muted { color:#666; }
+  .ok { color: #056d20; font-weight:600; }
+  .err { color: #b00020; font-weight:600; }
+  input[type="number"] { padding:.5rem .6rem; border:1px solid #d1d5db; border-radius:8px; width: 120px; }
+  .note { background:#f6f8fa; border:1px solid #e5e7eb; border-radius:8px; padding: .75rem; }
+  .hr { height:1px; background: repeating-linear-gradient(90deg,#e5e7eb, #e5e7eb 8px, transparent 8px, transparent 16px); margin: 1rem 0; }
+  footer { margin-top: .5rem; font-size:.9rem; color:#555; display:flex; justify-content:space-between; gap:.5rem; flex-wrap:wrap; }
+  .formlabel { font-size:.9rem; color:#374151; }
+  .options { display:flex; align-items:center; gap:.8rem; }
+  .options label { display:flex; align-items:center; gap:.25rem; cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Audio Recorder — WAV Only</h1>
+  <p class="lead">Filename embeds gender and age. Global counter enforced by the server.</p>
+
+  <div class="row" aria-label="metadata">
+    <div class="options">
+      <span class="formlabel">Gender:</span>
+      <label><input type="radio" name="gender" value="M" id="gM"> M</label>
+      <label><input type="radio" name="gender" value="F" id="gF"> F</label>
+      <label><input type="radio" name="gender" value="X" id="gX"> Other</label>
+    </div>
+    <label class="formlabel" for="age">Age:</label>
+    <input id="age" type="number" placeholder="00" min="0" max="120" step="1" />
+    <span id="nextIdx" class="pill"></span>
+  </div>
+
+  <div class="row" aria-label="controls">
+    <button id="recordBtn">Start recording</button>
+    <button id="stopBtn" class="secondary" disabled>Stop</button>
+    <span id="status" class="pill">idle</span>
+    <span id="sr" class="pill"></span>
+  </div>
+
+  <div class="row" aria-label="input-level">
+    <strong>Input level</strong>
+    <div id="meter"><div id="bar"></div></div>
+  </div>
+
+  <div class="col" style="align-items:stretch;" aria-label="playback">
+    <audio id="player" controls></audio>
+    <div class="row" style="justify-content:space-between;">
+      <a id="download" class="button" download="recording.wav">Download .wav</a>
+      <span id="sizeHint" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="hr" role="separator"></div>
+
+  <div class="col" aria-label="drive-upload">
+    <strong>Upload to Google Drive (via Apps Script Web App)</strong>
+    <div class="muted">Paste your Web App URL below (see README). Server assigns the final filename with the global counter.</div>
+    <input id="webAppUrl" type="text" placeholder="https://script.google.com/macros/s/AKfycb.../exec" aria-label="Apps Script Web App URL" style="width:min(100%,540px)" />
+    <input id="uploadToken" type="text" placeholder="Optional secret token (set in Apps Script)" aria-label="Secret token" />
+    <div class="row">
+      <button id="uploadBtn" aria-disabled="true" disabled>Upload latest .wav</button>
+      <span id="uploadStatus" class="muted">no upload yet</span>
+    </div>
+    <div id="serverName" class="muted"></div>
+  </div>
+
+  <div class="note" role="note">
+    <strong>Naming:</strong> <code>M_36_audio00001_dd_mm_yyyy_hh_mm_ss.wav</code>. Other/unspecified → <code>X</code>. If age missing → <code>00</code>.
+  </div>
+
+  <footer>
+    <span>Built with <code>getUserMedia</code> + <code>AudioWorklet</code>/<code>ScriptProcessor</code>. Exports <code>audio/wav</code> only.</span>
+    <span><a href="README.md">Setup guide</a></span>
+  </footer>
+</main>
+
+<script type="module">
+let audioCtx, stream, meterRAF, workletNode, scriptNode, sourceNode;
+let leftBuffers = [];  // mono accumulation (Float32)
+let sampleRate = 48000;
+
+const recordBtn = document.getElementById('recordBtn');
+const stopBtn   = document.getElementById('stopBtn');
+const statusEl  = document.getElementById('status');
+const srEl      = document.getElementById('sr');
+const player    = document.getElementById('player');
+const link      = document.getElementById('download');
+const bar       = document.getElementById('bar');
+const sizeHint  = document.getElementById('sizeHint');
+const uploadBtn = document.getElementById('uploadBtn');
+const uploadStatus = document.getElementById('uploadStatus');
+const webAppUrlInput = document.getElementById('webAppUrl');
+const uploadTokenInput = document.getElementById('uploadToken');
+const nextIdx = document.getElementById('nextIdx');
+const serverName = document.getElementById('serverName');
+
+let recording = false;
+let wavBlob = null;
+
+function setStatus(s) { statusEl.textContent = s; }
+function setSr() { srEl.textContent = 'SampleRate: ' + sampleRate + ' Hz'; }
+
+// Local preview counter (non-authoritative)
+function peekIndex() {
+  const key = 'audio_counter_v1';
+  let n = parseInt(localStorage.getItem(key) || '1', 10);
+  nextIdx.textContent = 'next (local): audio' + String(n).padStart(5,'0');
+}
+function bumpLocalIndex() {
+  const key = 'audio_counter_v1';
+  let n = parseInt(localStorage.getItem(key) || '1', 10);
+  localStorage.setItem(key, String(n + 1));
+}
+peekIndex();
+
+function startMeter(analyser) {
+  function tick() {
+    const data = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128;
+      sum += v*v;
+    }
+    const rms = Math.sqrt(sum / data.length);
+    bar.style.width = Math.min(100, Math.round(rms * 200)) + '%';
+    meterRAF = requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function stopMeter() { cancelAnimationFrame(meterRAF); }
+
+function interleaveMono(buffers) {
+  const length = buffers.reduce((a,b)=>a+b.length, 0);
+  const out = new Float32Array(length);
+  let offset = 0;
+  for (const b of buffers) { out.set(b, offset); offset += b.length; }
+  return out;
+}
+
+function floatTo16BitPCM(float32) {
+  const out = new DataView(new ArrayBuffer(float32.length * 2));
+  let offset = 0;
+  for (let i=0; i<float32.length; i++, offset+=2) {
+    let s = Math.max(-1, Math.min(1, float32[i]));
+    out.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return out;
+}
+
+function writeWavHeader(view, sampleRate, numSamples, numChannels = 1, bitsPerSample = 16) {
+  function writeString(view, offset, str) {
+    for (let i=0; i<str.length; i++) view.setUint8(offset+i, str.charCodeAt(i));
+  }
+  const blockAlign = numChannels * bitsPerSample/8;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = numSamples * blockAlign;
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+}
+
+function encodeWav(buffers, sampleRate) {
+  const mono = interleaveMono(buffers);
+  const pcm16 = floatTo16BitPCM(mono);
+  const header = new DataView(new ArrayBuffer(44));
+  writeWavHeader(header, sampleRate, mono.length, 1, 16);
+  const wavBytes = new Uint8Array(44 + pcm16.byteLength);
+  wavBytes.set(new Uint8Array(header.buffer), 0);
+  wavBytes.set(new Uint8Array(pcm16.buffer), 44);
+  return new Blob([wavBytes], { type: 'audio/wav' });
+}
+
+async function setupAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  sampleRate = audioCtx.sampleRate;
+  setSr();
+
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  sourceNode = audioCtx.createMediaStreamSource(stream);
+
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  sourceNode.connect(analyser);
+  startMeter(analyser);
+
+  leftBuffers = [];
+  if (audioCtx.audioWorklet) {
+    try {
+      await audioCtx.audioWorklet.addModule('recorder-worklet.js');
+      workletNode = new AudioWorkletNode(audioCtx, 'wav-recorder-processor');
+      sourceNode.connect(workletNode);
+      workletNode.port.onmessage = (e) => {
+        if (!recording) return;
+        if (e.data && e.data.type === 'chunk') {
+          leftBuffers.push(new Float32Array(e.data.samples));
+          const seconds = leftBuffers.reduce((acc,b)=>acc+b.length,0) / sampleRate;
+          sizeHint.textContent = 'Length: ' + seconds.toFixed(1) + ' s';
+        }
+      };
+      return;
+    } catch (e) {
+      console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e);
+    }
+  }
+  scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+  sourceNode.connect(scriptNode);
+  scriptNode.connect(audioCtx.destination);
+  scriptNode.onaudioprocess = (ev) => {
+    if (!recording) return;
+    const input = ev.inputBuffer.getChannelData(0);
+    leftBuffers.push(new Float32Array(input));
+    const seconds = leftBuffers.reduce((acc,b)=>acc+b.length,0) / sampleRate;
+    sizeHint.textContent = 'Length: ' + seconds.toFixed(1) + ' s';
+  };
+}
+
+function pad2(n){ return String(n).padStart(2,'0'); }
+function buildClientFilename() {
+  const sel = document.querySelector('input[name="gender"]:checked');
+  let g = sel ? sel.value : 'X';           // M / F / X(Other)
+  if (!(g === 'M' || g === 'F')) g = 'X';
+  const ageEl = document.getElementById('age');
+  const n = parseInt(ageEl.value || '', 10);
+  const ageStr = (!isNaN(n) && n >= 0 && n <= 120) ? String(n).padStart(2, '0') : '00';
+
+  // Local (non-authoritative) counter for preview
+  const key = 'audio_counter_v1';
+  let idxLocal = parseInt(localStorage.getItem(key) || '1', 10);
+  const idxStr = String(idxLocal).padStart(5, '0');
+
+  const d = new Date();
+  const dd = pad2(d.getDate());
+  const mm = pad2(d.getMonth()+1);
+  const yyyy = d.getFullYear();
+  const hh = pad2(d.getHours());
+  const mi = pad2(d.getMinutes());
+  const ss = pad2(d.getSeconds());
+  const stamp = `${dd}_${mm}_${yyyy}_${hh}_${mi}_${ss}`;
+  return `${g}_${ageStr}_audio${idxStr}_${stamp}.wav`;
+}
+
+recordBtn.addEventListener('click', async () => {
+  try {
+    recordBtn.disabled = true;
+    await setupAudio();
+    recording = true;
+    wavBlob = null;
+    link.href = '';
+    player.src = '';
+    sizeHint.textContent = '';
+    uploadBtn.disabled = true;
+    uploadStatus.textContent = 'no upload yet'; uploadStatus.className = 'muted';
+    serverName.textContent = '';
+    setStatus('recording…');
+    stopBtn.disabled = false;
+  } catch (e) {
+    console.error(e);
+    setStatus('permission denied or unavailable');
+    alert('Microphone access failed. Check browser permissions and HTTPS.');
+    recordBtn.disabled = false;
+  }
+});
+
+stopBtn.addEventListener('click', async () => {
+  try {
+    recording = false;
+    setStatus('encoding…');
+    if (stream) stream.getTracks().forEach(t=>t.stop());
+    stopMeter();
+    wavBlob = encodeWav(leftBuffers, sampleRate);
+    const url = URL.createObjectURL(wavBlob);
+    player.src = url;
+    const filename = buildClientFilename();
+    link.href = url;
+    link.download = filename;
+    sizeHint.textContent = 'Size: ' + (wavBlob.size/1024/1024).toFixed(2) + ' MB';
+    setStatus('ready');
+    stopBtn.disabled = true;
+    recordBtn.disabled = false;
+    uploadBtn.disabled = false;
+
+    // bump local preview counter
+    const key = 'audio_counter_v1';
+    let n = parseInt(localStorage.getItem(key) || '1', 10);
+    localStorage.setItem(key, String(n + 1));
+    peekIndex();
+  } catch (e) {
+    console.error(e);
+    setStatus('encode failed');
+    stopBtn.disabled = true;
+    recordBtn.disabled = false;
+  }
+});
+
+async function blobToBase64(blob) {
+  const buf = await blob.arrayBuffer();
+  let binary = '';
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  for (let i=0; i<bytes.length; i+=chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+  }
+  return btoa(binary);
+}
+
+uploadBtn.addEventListener('click', async () => {
+  try {
+    const webAppUrl = webAppUrlInput.value.trim();
+    const token = uploadTokenInput.value.trim();
+    if (!webAppUrl) { alert('Paste your Apps Script Web App URL first.'); return; }
+    if (!wavBlob) { alert('Record something first.'); return; }
+    uploadStatus.textContent = 'uploading…'; uploadStatus.className = 'muted';
+
+    const base64 = await blobToBase64(wavBlob);
+    const filename = link.download || buildClientFilename();
+    const mime = 'audio/wav';
+
+    const res = await fetch(webAppUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, mimeType: mime, data: base64, token })
+    });
+    let json = {};
+    try { json = await res.json(); } catch(e){}
+    if (res.ok && json.ok) {
+      uploadStatus.textContent = 'uploaded ✓ ' + (json.fileUrl || '');
+      uploadStatus.className = 'ok';
+      if (json.finalName) {
+        serverName.textContent = 'Saved as (server): ' + json.finalName;
+      }
+    } else {
+      uploadStatus.textContent = 'upload failed: ' + (json.error || res.status);
+      uploadStatus.className = 'err';
+    }
+  } catch (e) {
+    console.error(e);
+    uploadStatus.textContent = 'upload error: ' + e.message;
+    uploadStatus.className = 'err';
+  }
+});
+</script>
+</body>
+</html>
