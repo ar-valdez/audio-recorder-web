@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Audio Recorder — WAV Only</title>
-<meta name="description" content="Record WAV (10s max) and upload to Google Drive. Start/Stop toggle, optional Reset. Filename uses userID+gender+age+timestamp." />
+<title>Audio Recorder — WAV (Stereo)</title>
+<meta name="description" content="Record WAV (stereo, 10s max) and upload to Google Drive. Start/Stop toggle, optional Reset. Filename uses userID+gender+age+timestamp." />
 <link rel="icon" href="data:,">
 <style>
   :root { --w: 880px; }
@@ -40,8 +40,8 @@
 </head>
 <body>
 <main>
-  <h1>Audio Recorder — WAV Only</h1>
-  <p class="lead">Filename: <code>userID_G_AGE_audio_dd_mm_yyyy_hh_mm_ss.wav</code> • Max length: <strong>10s</strong> (you can stop earlier)</p>
+  <h1>Audio Recorder — WAV (Stereo)</h1>
+  <p class="lead">Filename: <code>userID_G_AGE_audio_dd_mm_yyyy_hh_mm_ss.wav</code> • Channels: <strong>2</strong> • Max length: <strong>10s</strong></p>
 
   <div class="row" aria-label="metadata">
     <label class="formlabel" for="userID">User ID (A123):</label>
@@ -84,7 +84,7 @@
   </div>
 
   <footer>
-    <span>Built with <code>getUserMedia</code> + <code>AudioWorklet</code>/<code>ScriptProcessor</code>. Exports <code>audio/wav</code> only.</span>
+    <span>Built with <code>getUserMedia</code> + <code>AudioWorklet</code>/<code>ScriptProcessor</code>. Exports <code>audio/wav</code> (stereo).</span>
     <span><a href="README.md">Setup guide</a></span>
   </footer>
 </main>
@@ -96,6 +96,7 @@ const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz4BwQs2SkQ8Z1C4bG3
 /* ===== State ===== */
 let audioCtx, stream, meterRAF;
 let leftBuffers = [];
+let rightBuffers = [];
 let sampleRate = 48000;
 let recording = false;
 let stopTimer = null;
@@ -137,41 +138,59 @@ function startMeter(analyser){
 }
 function stopMeter(){ if (meterRAF) cancelAnimationFrame(meterRAF); }
 
-function interleaveMono(buffers){
+function concatFloat32(buffers){
   const len = buffers.reduce((a,b)=>a+b.length,0);
   const out = new Float32Array(len);
-  let off = 0;
-  for (const b of buffers){ out.set(b, off); off += b.length; }
+  let off = 0; for (const b of buffers){ out.set(b,off); off += b.length; }
   return out;
 }
-function floatTo16BitPCM(f){
-  const v = new DataView(new ArrayBuffer(f.length * 2));
-  let o = 0;
-  for (let i=0;i<f.length;i++,o+=2){
-    let s = Math.max(-1, Math.min(1, f[i]));
-    v.setInt16(o, s<0 ? s*0x8000 : s*0x7FFF, true);
+function interleaveStereo(left, right){
+  const L = left.length, R = right.length;
+  const N = Math.min(L, R);                    // safety
+  const out = new Float32Array(N * 2);
+  let j = 0;
+  for (let i=0; i<N; i++){
+    out[j++] = left[i];
+    out[j++] = right[i];
   }
-  return v;
+  return out;
 }
-function writeWavHeader(view, sr, n, ch=1, bits=16){
+function floatTo16BitPCM(float32){
+  const out = new DataView(new ArrayBuffer(float32.length * 2));
+  let o = 0;
+  for (let i=0;i<float32.length;i++,o+=2){
+    let s = Math.max(-1, Math.min(1, float32[i]));
+    out.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return out;
+}
+function writeWavHeader(view, sr, numSamples, numChannels = 2, bitsPerSample = 16){
   function w(v,o,s){ for(let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }
-  const align = ch*bits/8, rate = sr*align, size = n*align;
-  w(view,0,'RIFF'); view.setUint32(4,36+size,true);
-  w(view,8,'WAVE'); w(view,12,'fmt '); view.setUint32(16,16,true);
-  view.setUint16(20,1,true); view.setUint16(22,ch,true);
-  view.setUint32(24,sr,true); view.setUint32(28,rate,true);
-  view.setUint16(32,align,true); view.setUint16(34,bits,true);
-  w(view,36,'data'); view.setUint32(40,size,true);
+  const blockAlign = numChannels * bitsPerSample / 8;
+  const byteRate   = sr * blockAlign;
+  const dataSize   = numSamples * blockAlign;
+  w(view, 0, 'RIFF'); view.setUint32(4, 36 + dataSize, true);
+  w(view, 8, 'WAVE');
+  w(view,12, 'fmt '); view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);                 // PCM
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sr, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  w(view,36, 'data'); view.setUint32(40, dataSize, true);
 }
-function encodeWav(buffers,sr){
-  const mono = interleaveMono(buffers);
-  const pcm16 = floatTo16BitPCM(mono);
+function encodeWavStereo(leftBuffers, rightBuffers, sr){
+  const left  = concatFloat32(leftBuffers);
+  const right = concatFloat32(rightBuffers.length ? rightBuffers : [left]); // duplicate if mono input
+  const inter = interleaveStereo(left, right);
+  const pcm16 = floatTo16BitPCM(inter);
   const header = new DataView(new ArrayBuffer(44));
-  writeWavHeader(header, sr, mono.length, 1, 16);
+  writeWavHeader(header, sr, inter.length / 2, 2, 16);
   const wav = new Uint8Array(44 + pcm16.byteLength);
-  wav.set(new Uint8Array(header.buffer),0);
-  wav.set(new Uint8Array(pcm16.buffer),44);
-  return new Blob([wav], { type:'audio/wav' });
+  wav.set(new Uint8Array(header.buffer), 0);
+  wav.set(new Uint8Array(pcm16.buffer), 44);
+  return new Blob([wav], { type: 'audio/wav' });
 }
 
 function updateCountdown(){
@@ -186,7 +205,14 @@ async function setupAudio(){
   const AC = window.AudioContext || window.webkitAudioContext;
   audioCtx = new AC(); sampleRate = audioCtx.sampleRate; setSr();
 
-  stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+  // Ask for 2 channels; browsers may still give 1 — we handle that
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 2,
+      // chrome hints (advisory)
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false
+    }
+  });
   const src = audioCtx.createMediaStreamSource(stream);
 
   const analyser = audioCtx.createAnalyser();
@@ -195,31 +221,41 @@ async function setupAudio(){
   startMeter(analyser);
 
   leftBuffers = [];
-  if (audioCtx.audioWorklet){
-    try{
+  rightBuffers = [];
+
+  if (audioCtx.audioWorklet) {
+    try {
       await audioCtx.audioWorklet.addModule('recorder-worklet.js');
-      const node = new AudioWorkletNode(audioCtx,'wav-recorder-processor');
+      const node = new AudioWorkletNode(audioCtx, 'wav-recorder-processor', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 2 });
       src.connect(node);
       node.port.onmessage = (e) => {
         if (!recording) return;
-        if (e.data && e.data.type === 'chunk'){
-          leftBuffers.push(new Float32Array(e.data.samples));
-          const secs = leftBuffers.reduce((acc,b)=>acc+b.length,0) / sampleRate;
+        if (e.data && e.data.type === 'chunk') {
+          // e.data.left / e.data.right are Float32Arrays
+          leftBuffers.push(new Float32Array(e.data.left));
+          rightBuffers.push(new Float32Array(e.data.right));
+          const secs = (leftBuffers.reduce((a,b)=>a+b.length,0) / sampleRate);
           sizeHint.textContent = 'Length: ' + secs.toFixed(1) + ' s';
         }
       };
       return;
-    } catch (e){
-      console.warn('AudioWorklet failed, using ScriptProcessor:', e);
+    } catch (e) {
+      console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e);
     }
   }
-  const sp = audioCtx.createScriptProcessor(4096,1,1);
+
+  // Fallback: ScriptProcessor with 2 input channels if available
+  const sp = audioCtx.createScriptProcessor(4096, 2, 0);
   src.connect(sp); sp.connect(audioCtx.destination);
   sp.onaudioprocess = (ev) => {
     if (!recording) return;
-    const input = ev.inputBuffer.getChannelData(0);
-    leftBuffers.push(new Float32Array(input));
-    const secs = leftBuffers.reduce((acc,b)=>acc+b.length,0) / sampleRate;
+    const inBuf = ev.inputBuffer;
+    const chs = inBuf.numberOfChannels || 1;
+    const L = inBuf.getChannelData(0);
+    const R = chs > 1 ? inBuf.getChannelData(1) : L; // duplicate if mono
+    leftBuffers.push(new Float32Array(L));
+    rightBuffers.push(new Float32Array(R));
+    const secs = (leftBuffers.reduce((a,b)=>a+b.length,0) / sampleRate);
     sizeHint.textContent = 'Length: ' + secs.toFixed(1) + ' s';
   };
 }
@@ -227,7 +263,6 @@ async function setupAudio(){
 function buildFilename(){
   const user = currentUserID(), g = currentGender(), age = currentAge2();
   const d = new Date();
-  const pad2 = n => String(n).padStart(2,'0');
   const dd = pad2(d.getDate()), mm = pad2(d.getMonth()+1), yyyy = d.getFullYear();
   const hh = pad2(d.getHours()), mi = pad2(d.getMinutes()), ss = pad2(d.getSeconds());
   return `${user}_${g}_${age}_audio_${dd}_${mm}_${yyyy}_${hh}_${mi}_${ss}.wav`;
@@ -237,7 +272,7 @@ function finalizeRecording(){
   setStatus('encoding…');
   if (stream) stream.getTracks().forEach(t=>t.stop());
   stopMeter();
-  const blob = encodeWav(leftBuffers, sampleRate);
+  const blob = encodeWavStereo(leftBuffers, rightBuffers, sampleRate);
   const url = URL.createObjectURL(blob);
   player.src = url;
   const filename = buildFilename();
@@ -251,7 +286,7 @@ function finalizeRecording(){
 
 function startRecording(){
   recording = true;
-  leftBuffers = [];
+  leftBuffers = []; rightBuffers = [];
   startTs = performance.now();
   updateCountdown();
   setStatus('recording…');
@@ -297,7 +332,7 @@ resetBtn.addEventListener('click', () => {
   recording = false;
   try { if (stream) stream.getTracks().forEach(t=>t.stop()); } catch {}
   stopMeter();
-  leftBuffers = [];
+  leftBuffers = []; rightBuffers = [];
   window.__latestBlob = null; window.__latestFilename = null;
   player.src = ''; link.href = ''; sizeHint.textContent = '';
   setStatus('idle');
@@ -314,7 +349,7 @@ async function blobToBase64(blob){
   return btoa(binary);
 }
 
-/* ===== Safari-friendly upload (no preflight) + full error reporting ===== */
+// Upload (Safari-friendly: text/plain avoids preflight; fine on Chrome)
 uploadBtn.addEventListener('click', async () => {
   try{
     if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_')){
@@ -331,13 +366,12 @@ uploadBtn.addEventListener('click', async () => {
 
     const res = await fetch(WEB_APP_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoid CORS preflight in Safari
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 }),
       redirect: 'follow'
     });
 
-    const raw = await res.text();
-    let data = null; try { data = JSON.parse(raw); } catch(_){}
+    const raw = await res.text(); let data = null; try { data = JSON.parse(raw); } catch(_){}
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}\n${raw}`);
     if (!data || data.ok !== true) throw new Error(data && data.error ? data.error : `Unexpected response: ${raw}`);
 
