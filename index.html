@@ -72,7 +72,10 @@
   <div class="col" style="align-items:stretch;" aria-label="playback">
     <audio id="player" controls></audio>
     <div class="row" style="justify-content:space-between;">
-      <a id="download" class="button" download="recording.wav">Download .wav</a>
+      <div class="row" style="gap:.5rem;">
+        <button id="previewBtn" class="secondary" disabled>Preview</button>
+        <a id="download" class="button" download="recording.wav">Download .wav</a>
+      </div>
       <span id="sizeHint" class="muted"></span>
     </div>
   </div>
@@ -110,6 +113,7 @@ const resetBtn  = document.getElementById('resetBtn');
 const statusEl  = document.getElementById('status');
 const srEl      = document.getElementById('sr');
 const player    = document.getElementById('player');
+const previewBtn= document.getElementById('previewBtn');
 const link      = document.getElementById('download');
 const bar       = document.getElementById('bar');
 const sizeHint  = document.getElementById('sizeHint');
@@ -145,14 +149,10 @@ function concatFloat32(buffers){
   return out;
 }
 function interleaveStereo(left, right){
-  const L = left.length, R = right.length;
-  const N = Math.min(L, R);                    // safety
+  const N = Math.min(left.length, right.length);
   const out = new Float32Array(N * 2);
   let j = 0;
-  for (let i=0; i<N; i++){
-    out[j++] = left[i];
-    out[j++] = right[i];
-  }
+  for (let i=0;i<N;i++){ out[j++] = left[i]; out[j++] = right[i]; }
   return out;
 }
 function floatTo16BitPCM(float32){
@@ -164,11 +164,11 @@ function floatTo16BitPCM(float32){
   }
   return out;
 }
-function writeWavHeader(view, sr, numSamples, numChannels = 2, bitsPerSample = 16){
+function writeWavHeader(view, sr, numFrames, numChannels = 2, bitsPerSample = 16){
   function w(v,o,s){ for(let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }
   const blockAlign = numChannels * bitsPerSample / 8;
   const byteRate   = sr * blockAlign;
-  const dataSize   = numSamples * blockAlign;
+  const dataSize   = numFrames * blockAlign;
   w(view, 0, 'RIFF'); view.setUint32(4, 36 + dataSize, true);
   w(view, 8, 'WAVE');
   w(view,12, 'fmt '); view.setUint32(16, 16, true);
@@ -182,7 +182,7 @@ function writeWavHeader(view, sr, numSamples, numChannels = 2, bitsPerSample = 1
 }
 function encodeWavStereo(leftBuffers, rightBuffers, sr){
   const left  = concatFloat32(leftBuffers);
-  const right = concatFloat32(rightBuffers.length ? rightBuffers : [left]); // duplicate if mono input
+  const right = concatFloat32(rightBuffers.length ? rightBuffers : [left]); // duplicate if mono
   const inter = interleaveStereo(left, right);
   const pcm16 = floatTo16BitPCM(inter);
   const header = new DataView(new ArrayBuffer(44));
@@ -205,13 +205,8 @@ async function setupAudio(){
   const AC = window.AudioContext || window.webkitAudioContext;
   audioCtx = new AC(); sampleRate = audioCtx.sampleRate; setSr();
 
-  // Ask for 2 channels; browsers may still give 1 — we handle that
   stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 2,
-      // chrome hints (advisory)
-      echoCancellation: false, noiseSuppression: false, autoGainControl: false
-    }
+    audio: { channelCount: 2, echoCancellation:false, noiseSuppression:false, autoGainControl:false }
   });
   const src = audioCtx.createMediaStreamSource(stream);
 
@@ -226,12 +221,11 @@ async function setupAudio(){
   if (audioCtx.audioWorklet) {
     try {
       await audioCtx.audioWorklet.addModule('recorder-worklet.js');
-      const node = new AudioWorkletNode(audioCtx, 'wav-recorder-processor', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 2 });
+      const node = new AudioWorkletNode(audioCtx, 'wav-recorder-processor', { numberOfInputs:1, numberOfOutputs:0, channelCount:2 });
       src.connect(node);
       node.port.onmessage = (e) => {
         if (!recording) return;
         if (e.data && e.data.type === 'chunk') {
-          // e.data.left / e.data.right are Float32Arrays
           leftBuffers.push(new Float32Array(e.data.left));
           rightBuffers.push(new Float32Array(e.data.right));
           const secs = (leftBuffers.reduce((a,b)=>a+b.length,0) / sampleRate);
@@ -239,12 +233,9 @@ async function setupAudio(){
         }
       };
       return;
-    } catch (e) {
-      console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e);
-    }
+    } catch (e) { console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e); }
   }
 
-  // Fallback: ScriptProcessor with 2 input channels if available
   const sp = audioCtx.createScriptProcessor(4096, 2, 0);
   src.connect(sp); sp.connect(audioCtx.destination);
   sp.onaudioprocess = (ev) => {
@@ -252,7 +243,7 @@ async function setupAudio(){
     const inBuf = ev.inputBuffer;
     const chs = inBuf.numberOfChannels || 1;
     const L = inBuf.getChannelData(0);
-    const R = chs > 1 ? inBuf.getChannelData(1) : L; // duplicate if mono
+    const R = chs > 1 ? inBuf.getChannelData(1) : L;
     leftBuffers.push(new Float32Array(L));
     rightBuffers.push(new Float32Array(R));
     const secs = (leftBuffers.reduce((a,b)=>a+b.length,0) / sampleRate);
@@ -268,13 +259,24 @@ function buildFilename(){
   return `${user}_${g}_${age}_audio_${dd}_${mm}_${yyyy}_${hh}_${mi}_${ss}.wav`;
 }
 
+async function setPlayerSource(url){
+  // Fully reset then set and try to play
+  try { player.pause(); } catch {}
+  player.removeAttribute('src'); player.load();  // hard reset for some browsers
+  player.srcObject = null;
+  player.src = url;
+  player.load();
+  try { await player.play(); } catch { /* user can click preview/play */ }
+  previewBtn.disabled = false;
+}
+
 function finalizeRecording(){
   setStatus('encoding…');
   if (stream) stream.getTracks().forEach(t=>t.stop());
   stopMeter();
   const blob = encodeWavStereo(leftBuffers, rightBuffers, sampleRate);
   const url = URL.createObjectURL(blob);
-  player.src = url;
+  setPlayerSource(url);
   const filename = buildFilename();
   link.href = url; link.download = filename;
   sizeHint.textContent = 'Size: ' + (blob.size/1024/1024).toFixed(2) + ' MB';
@@ -294,6 +296,8 @@ function startRecording(){
   recordBtn.disabled = false;
   resetBtn.disabled = false;
   uploadBtn.disabled = true;
+  previewBtn.disabled = true;
+  setPlayerSource(''); // clear previous source
   stopTimer = setTimeout(()=>{ if(recording) stopRecording(); }, Math.ceil(MAX_SECONDS*1000));
 }
 function stopRecording(){
@@ -310,7 +314,8 @@ recordBtn.addEventListener('click', async () => {
   try{
     if (!recording){
       recordBtn.disabled = true;
-      player.src = ''; link.href = ''; sizeHint.textContent = '';
+      player.removeAttribute('src'); player.srcObject = null; player.load();
+      link.href = ''; sizeHint.textContent = '';
       await setupAudio();
       if (audioCtx.state === 'suspended') await audioCtx.resume();
       startRecording();
@@ -334,10 +339,25 @@ resetBtn.addEventListener('click', () => {
   stopMeter();
   leftBuffers = []; rightBuffers = [];
   window.__latestBlob = null; window.__latestFilename = null;
-  player.src = ''; link.href = ''; sizeHint.textContent = '';
+  player.removeAttribute('src'); player.srcObject = null; player.load();
+  link.href = ''; sizeHint.textContent = '';
   setStatus('idle');
   recordBtn.disabled = false; recordBtn.textContent = 'Start recording';
-  resetBtn.disabled = true; uploadBtn.disabled = true;
+  resetBtn.disabled = true; uploadBtn.disabled = true; previewBtn.disabled = true;
+});
+
+document.getElementById('previewBtn').addEventListener('click', async () => {
+  try { await player.play(); } catch (e) { alert('Press the Play control on the audio bar to listen.'); }
+});
+
+player.addEventListener('error', () => {
+  const err = player.error;
+  if (!err) return;
+  const map = {
+    1: 'MEDIA_ERR_ABORTED', 2: 'MEDIA_ERR_NETWORK',
+    3: 'MEDIA_ERR_DECODE', 4: 'MEDIA_ERR_SRC_NOT_SUPPORTED'
+  };
+  alert('Playback error: ' + (map[err.code] || 'UNKNOWN') + (err.message ? ('\n' + err.message) : ''));
 });
 
 async function blobToBase64(blob){
