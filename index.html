@@ -90,8 +90,11 @@
 </main>
 
 <script type="module">
+/* ===== CONFIG ===== */
+/* Tip: using the direct googleusercontent.com URL (from your Apps Script deployment details) can help Safari. */
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz4BwQs2SkQ8Z1C4bG33rDPn1nZG4g_wAvVPYI_soEVXMtNZNDNL0Qf6Szx9jpE__TNNw/exec';
 
+/* ===== State ===== */
 let audioCtx, stream, meterRAF;
 let leftBuffers = [];
 let sampleRate = 48000;
@@ -99,9 +102,9 @@ let recording = false;
 let stopTimer = null;
 let countdownRAF = null;
 let startTs = 0;
-
 const MAX_SECONDS = 10.0;
 
+/* ===== Elements ===== */
 const recordBtn = document.getElementById('recordToggleBtn');
 const resetBtn  = document.getElementById('resetBtn');
 const statusEl  = document.getElementById('status');
@@ -113,61 +116,124 @@ const sizeHint  = document.getElementById('sizeHint');
 const uploadBtn = document.getElementById('uploadBtn');
 const countdown = document.getElementById('countdown');
 
+/* ===== Helpers ===== */
 function setStatus(s) { statusEl.textContent = s; }
 function setSr() { srEl.textContent = 'SampleRate: ' + sampleRate + ' Hz'; }
 function currentUserID() { const raw = (document.getElementById('userID').value || '').trim().toUpperCase(); return /^[A-Z][0-9]{3}$/.test(raw) ? raw : 'U000'; }
 function currentGender() { const sel = document.querySelector('input[name="gender"]:checked'); const v = sel ? sel.value : 'X'; return (v === 'M' || v === 'F') ? v : 'X'; }
 function currentAge2() { const n = parseInt((document.getElementById('age').value || '').trim(), 10); if (isNaN(n) || n<0 || n>120) return '00'; return String(n).padStart(2,'0'); }
+function pad2(n){ return String(n).padStart(2,'0'); }
+function isSafari(){
+  const ua = navigator.userAgent;
+  return /^((?!chrome|android).)*safari/i.test(ua);
+}
 
-function startMeter(analyser){function t(){const d=new Uint8Array(analyser.fftSize);analyser.getByteTimeDomainData(d);let s=0;for(let i=0;i<d.length;i++){const v=(d[i]-128)/128;s+=v*v;}const rms=Math.sqrt(s/d.length);bar.style.width=Math.min(100,Math.round(rms*200))+'%';meterRAF=requestAnimationFrame(t);}t();}
-function stopMeter(){ if(meterRAF) cancelAnimationFrame(meterRAF); }
+function startMeter(analyser){
+  function tick(){
+    const data = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (let i=0; i<data.length; i++){ const v=(data[i]-128)/128; sum += v*v; }
+    const rms = Math.sqrt(sum/data.length);
+    bar.style.width = Math.min(100, Math.round(rms*200)) + '%';
+    meterRAF = requestAnimationFrame(tick);
+  }
+  tick();
+}
+function stopMeter(){ if (meterRAF) cancelAnimationFrame(meterRAF); }
 
-function interleaveMono(buffers){const len=buffers.reduce((a,b)=>a+b.length,0);const out=new Float32Array(len);let off=0;for(const b of buffers){out.set(b,off);off+=b.length;}return out;}
-function floatTo16BitPCM(f){const v=new DataView(new ArrayBuffer(f.length*2));let o=0;for(let i=0;i<f.length;i++,o+=2){let s=Math.max(-1,Math.min(1,f[i]));v.setInt16(o,s<0?s*0x8000:s*0x7FFF,true);}return v;}
-function writeWavHeader(view, sr, n, ch=1, bits=16){function w(v,o,s){for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));}const align=ch*bits/8, rate=sr*align, size=n*align; w(view,0,'RIFF'); view.setUint32(4,36+size,true); w(view,8,'WAVE'); w(view,12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,ch,true); view.setUint32(24,sr,true); view.setUint32(28,rate,true); view.setUint16(32,align,true); view.setUint16(34,bits,true); w(view,36,'data'); view.setUint32(40,size,true);}
-function encodeWav(buffers,sr){const mono=interleaveMono(buffers);const pcm16=floatTo16BitPCM(mono);const header=new DataView(new ArrayBuffer(44));writeWavHeader(header,sr,mono.length,1,16);const wav=new Uint8Array(44+pcm16.byteLength);wav.set(new Uint8Array(header.buffer),0);wav.set(new Uint8Array(pcm16.buffer),44);return new Blob([wav],{type:'audio/wav'});}
+function interleaveMono(buffers){
+  const len = buffers.reduce((a,b)=>a+b.length,0);
+  const out = new Float32Array(len);
+  let off = 0;
+  for (const b of buffers){ out.set(b, off); off += b.length; }
+  return out;
+}
+function floatTo16BitPCM(f){
+  const v = new DataView(new ArrayBuffer(f.length * 2));
+  let o = 0;
+  for (let i=0;i<f.length;i++,o+=2){
+    let s = Math.max(-1, Math.min(1, f[i]));
+    v.setInt16(o, s<0 ? s*0x8000 : s*0x7FFF, true);
+  }
+  return v;
+}
+function writeWavHeader(view, sr, n, ch=1, bits=16){
+  function w(v,o,s){ for(let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }
+  const align = ch*bits/8, rate = sr*align, size = n*align;
+  w(view,0,'RIFF'); view.setUint32(4,36+size,true);
+  w(view,8,'WAVE'); w(view,12,'fmt '); view.setUint32(16,16,true);
+  view.setUint16(20,1,true); view.setUint16(22,ch,true);
+  view.setUint32(24,sr,true); view.setUint32(28,rate,true);
+  view.setUint16(32,align,true); view.setUint16(34,bits,true);
+  w(view,36,'data'); view.setUint32(40,size,true);
+}
+function encodeWav(buffers,sr){
+  const mono = interleaveMono(buffers);
+  const pcm16 = floatTo16BitPCM(mono);
+  const header = new DataView(new ArrayBuffer(44));
+  writeWavHeader(header, sr, mono.length, 1, 16);
+  const wav = new Uint8Array(44 + pcm16.byteLength);
+  wav.set(new Uint8Array(header.buffer),0);
+  wav.set(new Uint8Array(pcm16.buffer),44);
+  return new Blob([wav], { type:'audio/wav' });
+}
 
-function updateCountdown(){ if(!recording){countdown.textContent=MAX_SECONDS.toFixed(1)+'s';return;} const elapsed=(performance.now()-startTs)/1000; const left=Math.max(0,MAX_SECONDS-elapsed); countdown.textContent=left.toFixed(1)+'s'; countdownRAF=requestAnimationFrame(updateCountdown); }
+function updateCountdown(){
+  if (!recording){ countdown.textContent = MAX_SECONDS.toFixed(1) + 's'; return; }
+  const elapsed = (performance.now() - startTs) / 1000;
+  const left = Math.max(0, MAX_SECONDS - elapsed);
+  countdown.textContent = left.toFixed(1) + 's';
+  countdownRAF = requestAnimationFrame(updateCountdown);
+}
 
 async function setupAudio(){
   const AC = window.AudioContext || window.webkitAudioContext;
   audioCtx = new AC(); sampleRate = audioCtx.sampleRate; setSr();
+
   stream = await navigator.mediaDevices.getUserMedia({ audio:true });
   const src = audioCtx.createMediaStreamSource(stream);
-  const analyser = audioCtx.createAnalyser(); analyser.fftSize=2048; src.connect(analyser); startMeter(analyser);
+
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  src.connect(analyser);
+  startMeter(analyser);
+
   leftBuffers = [];
-  if (audioCtx.audioWorklet) {
-    try {
+  if (audioCtx.audioWorklet){
+    try{
       await audioCtx.audioWorklet.addModule('recorder-worklet.js');
       const node = new AudioWorkletNode(audioCtx,'wav-recorder-processor');
       src.connect(node);
-      node.port.onmessage = e => {
+      node.port.onmessage = (e) => {
         if (!recording) return;
-        if (e.data && e.data.type === 'chunk') {
+        if (e.data && e.data.type === 'chunk'){
           leftBuffers.push(new Float32Array(e.data.samples));
-          const secs = leftBuffers.reduce((acc,b)=>acc+b.length,0)/sampleRate;
+          const secs = leftBuffers.reduce((acc,b)=>acc+b.length,0) / sampleRate;
           sizeHint.textContent = 'Length: ' + secs.toFixed(1) + ' s';
         }
       };
       return;
-    } catch (e) { console.warn('AudioWorklet failed, using ScriptProcessor:', e); }
+    } catch (e){
+      console.warn('AudioWorklet failed, using ScriptProcessor:', e);
+    }
   }
   const sp = audioCtx.createScriptProcessor(4096,1,1);
   src.connect(sp); sp.connect(audioCtx.destination);
-  sp.onaudioprocess = ev => {
+  sp.onaudioprocess = (ev) => {
     if (!recording) return;
     const input = ev.inputBuffer.getChannelData(0);
     leftBuffers.push(new Float32Array(input));
-    const secs = leftBuffers.reduce((acc,b)=>acc+b.length,0)/sampleRate;
+    const secs = leftBuffers.reduce((acc,b)=>acc+b.length,0) / sampleRate;
     sizeHint.textContent = 'Length: ' + secs.toFixed(1) + ' s';
   };
 }
 
-function pad2(n){ return String(n).padStart(2,'0'); }
 function buildFilename(){
-  const user=currentUserID(), g=currentGender(), age=currentAge2();
-  const d=new Date(); const dd=pad2(d.getDate()), mm=pad2(d.getMonth()+1), yyyy=d.getFullYear();
-  const hh=pad2(d.getHours()), mi=pad2(d.getMinutes()), ss=pad2(d.getSeconds());
+  const user = currentUserID(), g = currentGender(), age = currentAge2();
+  const d = new Date();
+  const dd = pad2(d.getDate()), mm = pad2(d.getMonth()+1), yyyy = d.getFullYear();
+  const hh = pad2(d.getHours()), mi = pad2(d.getMinutes()), ss = pad2(d.getSeconds());
   return `${user}_${g}_${age}_audio_${dd}_${mm}_${yyyy}_${hh}_${mi}_${ss}.wav`;
 }
 
@@ -188,87 +254,151 @@ function finalizeRecording(){
 }
 
 function startRecording(){
-  recording = true; leftBuffers = []; startTs = performance.now();
-  updateCountdown(); setStatus('recording…');
-  recordBtn.textContent = 'Stop recording'; recordBtn.disabled = false;
-  resetBtn.disabled = false; uploadBtn.disabled = true;
+  recording = true;
+  leftBuffers = [];
+  startTs = performance.now();
+  updateCountdown();
+  setStatus('recording…');
+  recordBtn.textContent = 'Stop recording';
+  recordBtn.disabled = false;
+  resetBtn.disabled = false;
+  uploadBtn.disabled = true;
   stopTimer = setTimeout(()=>{ if(recording) stopRecording(); }, Math.ceil(MAX_SECONDS*1000));
 }
 function stopRecording(){
   if (!recording) return;
   recording = false;
-  if (stopTimer) { clearTimeout(stopTimer); stopTimer=null; }
+  if (stopTimer){ clearTimeout(stopTimer); stopTimer = null; }
   if (countdownRAF) cancelAnimationFrame(countdownRAF);
-  countdown.textContent = MAX_SECONDS.toFixed(1)+'s';
+  countdown.textContent = MAX_SECONDS.toFixed(1) + 's';
   finalizeRecording();
 }
 
+/* ===== Events ===== */
 recordBtn.addEventListener('click', async () => {
-  try {
-    if (!recording) {
+  try{
+    if (!recording){
       recordBtn.disabled = true;
-      player.src=''; link.href=''; sizeHint.textContent='';
+      player.src = ''; link.href = ''; sizeHint.textContent = '';
       await setupAudio();
       if (audioCtx.state === 'suspended') await audioCtx.resume();
       startRecording();
     } else {
       stopRecording();
     }
-  } catch (e) {
+  } catch (e){
     console.error(e);
     setStatus('permission denied or unavailable');
     alert('Microphone access failed. Check browser permissions and HTTPS.');
-    recordBtn.disabled=false; recordBtn.textContent='Start recording'; resetBtn.disabled=true;
+    recordBtn.disabled = false; recordBtn.textContent = 'Start recording'; resetBtn.disabled = true;
   }
 });
 
 resetBtn.addEventListener('click', () => {
-  if (stopTimer) { clearTimeout(stopTimer); stopTimer=null; }
+  if (stopTimer){ clearTimeout(stopTimer); stopTimer = null; }
   if (countdownRAF) cancelAnimationFrame(countdownRAF);
-  countdown.textContent = MAX_SECONDS.toFixed(1)+'s';
-  recording=false;
+  countdown.textContent = MAX_SECONDS.toFixed(1) + 's';
+  recording = false;
   try { if (stream) stream.getTracks().forEach(t=>t.stop()); } catch {}
-  stopMeter(); leftBuffers=[]; window.__latestBlob=null; window.__latestFilename=null;
-  player.src=''; link.href=''; sizeHint.textContent='';
-  setStatus('idle'); recordBtn.disabled=false; recordBtn.textContent='Start recording';
-  resetBtn.disabled=true; uploadBtn.disabled=true;
+  stopMeter();
+  leftBuffers = [];
+  window.__latestBlob = null; window.__latestFilename = null;
+  player.src = ''; link.href = ''; sizeHint.textContent = '';
+  setStatus('idle');
+  recordBtn.disabled = false; recordBtn.textContent = 'Start recording';
+  resetBtn.disabled = true; uploadBtn.disabled = true;
 });
 
 async function blobToBase64(blob){
   const buf = await blob.arrayBuffer();
-  let binary = ''; const bytes = new Uint8Array(buf); const chunk=0x8000;
-  for (let i=0;i<bytes.length;i+=chunk) binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+  let binary = ''; const bytes = new Uint8Array(buf); const chunk = 0x8000;
+  for (let i=0; i<bytes.length; i+=chunk){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+  }
   return btoa(binary);
 }
 
-// Safari-friendly upload: text/plain to avoid preflight
+/* ===== Safari-friendly upload with fallback ===== */
 uploadBtn.addEventListener('click', async () => {
-  try {
-    if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_')) { alert('Website not configured: missing Apps Script URL.'); return; }
-    if (!window.__latestBlob) { alert('Record something first.'); return; }
+  try{
+    if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_')){
+      alert('Website not configured: missing Apps Script URL.'); return;
+    }
+    if (!window.__latestBlob){ alert('Record something first.'); return; }
 
-    uploadBtn.disabled = true; const original = uploadBtn.textContent; uploadBtn.textContent='Uploading…';
+    uploadBtn.disabled = true;
+    const original = uploadBtn.textContent;
+    uploadBtn.textContent = 'Uploading…';
 
     const base64 = await blobToBase64(window.__latestBlob);
     const filename = window.__latestFilename || buildFilename();
 
-    const res = await fetch(WEB_APP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 }),
-      redirect: 'follow'
-    });
+    // First attempt: normal CORS (works in Chrome and most Safari setups)
+    const tryStandard = async () => {
+      const res = await fetch(WEB_APP_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // simple request, avoids preflight
+        body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 }),
+        redirect: 'follow',
+        referrerPolicy: 'no-referrer',
+        keepalive: true
+      });
+      // If Safari blocks CORS, this might still be OK but reading body could fail.
+      const raw = await res.text().catch(() => null);
+      let data = null;
+      try { data = raw ? JSON.parse(raw) : null; } catch(_){}
+      if (res.ok && data && data.ok === true) {
+        return { ok: true, finalName: data.finalName || filename, soft: false };
+      }
+      if (res.ok && !raw && isSafari()) {
+        // Body unreadable due to CORS, but request likely delivered.
+        return { ok: true, finalName: filename, soft: true };
+      }
+      const msg = data && data.error ? data.error : (raw || `HTTP ${res.status} ${res.statusText}`);
+      throw new Error(msg);
+    };
 
-    const raw = await res.text(); let data=null; try { data = JSON.parse(raw); } catch(_){}
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}\n${raw}`);
-    if (!data || data.ok !== true) throw new Error(data && data.error ? data.error : `Unexpected response: ${raw}`);
+    // Safari fallback: no-cors (opaque response). We can’t read the body but the upload reaches the server.
+    const tryNoCors = async () => {
+      const res = await fetch(WEB_APP_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // still simple
+        body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 }),
+        keepalive: true
+      });
+      // res.type === 'opaque' here if sent; treat as success
+      return { ok: true, finalName: filename, soft: true };
+    };
 
-    alert('Uploaded ✓\n' + (data.finalName || filename));
-  } catch (e) {
+    let result;
+    try {
+      result = await tryStandard();
+    } catch (e1) {
+      if (isSafari()) {
+        // Retry with no-cors; best-effort success
+        result = await tryNoCors();
+      } else {
+        throw e1;
+      }
+    }
+
+    if (result.ok) {
+      if (result.soft) {
+        alert('Sent ✓\n(Safari limited the response; check Drive for the new file)\n' + result.finalName);
+      } else {
+        alert('Uploaded ✓\n' + result.finalName);
+      }
+    } else {
+      throw new Error('Unknown upload error');
+    }
+
+  } catch (e){
     console.error('Upload failed:', e);
     alert('Upload failed:\n' + e.message);
   } finally {
-    uploadBtn.textContent='Upload'; uploadBtn.disabled=false;
+    uploadBtn.textContent = 'Upload';
+    uploadBtn.disabled = false;
   }
 });
 </script>
