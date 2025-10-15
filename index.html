@@ -30,7 +30,6 @@
   .muted { color:#666; }
   input[type="number"], input[type="text"] { padding:.5rem .6rem; border:1px solid #d1d5db; border-radius:8px; }
   input#userID { width: 100px; text-transform: uppercase; }
-  .note { background:#f6f8fa; border:1px solid #e5e7eb; border-radius:8px; padding: .75rem; }
   .hr { height:1px; background: repeating-linear-gradient(90deg,#e5e7eb, #e5e7eb 8px, transparent 8px, transparent 16px); margin: 1rem 0; }
   footer { margin-top: .5rem; font-size:.9rem; color:#555; display:flex; justify-content:space-between; gap:.5rem; flex-wrap:wrap; }
   .formlabel { font-size:.9rem; color:#374151; }
@@ -90,11 +89,13 @@
   </footer>
 </main>
 
+<!-- ***** Put ALL JavaScript inside this script tag ***** -->
+<script type="module">
 // === CONFIG: paste your Apps Script Web App URL here ===
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz4BwQs2SkQ8Z1C4bG33rDPn1nZG4g_wAvVPYI_soEVXMtNZNDNL0Qf6Szx9jpE__TNNw/exec';
 // =======================================================
 
-let audioCtx, stream, meterRAF, workletNode, scriptNode, sourceNode;
+let audioCtx, stream, meterRAF;
 let leftBuffers = [];  // mono accumulation (Float32)
 let sampleRate = 48000;
 let recording = false;
@@ -373,11 +374,12 @@ uploadBtn.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 })
     });
-    // Button only; no status text (per your earlier request).
   } catch (e) {
     console.error('Upload failed:', e);
   }
 });
 </script>
+<!-- ***** End of script ***** -->
+
 </body>
 </html>
