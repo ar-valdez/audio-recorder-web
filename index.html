@@ -89,7 +89,7 @@
   </footer>
 </main>
 
-<!-- ***** Put ALL JavaScript inside this script tag ***** -->
+<!-- ***** All JavaScript is inside this script tag ***** -->
 <script type="module">
 // === CONFIG: paste your Apps Script Web App URL here ===
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz4BwQs2SkQ8Z1C4bG33rDPn1nZG4g_wAvVPYI_soEVXMtNZNDNL0Qf6Szx9jpE__TNNw/exec';
@@ -361,21 +361,50 @@ async function blobToBase64(blob) {
   return btoa(binary);
 }
 
+/* ===== Improved upload with full error reporting ===== */
 uploadBtn.addEventListener('click', async () => {
   try {
-    if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_YOUR_APPS_SCRIPT')) {
-      alert('Website not configured: missing Apps Script URL. Set WEB_APP_URL in index.html.'); return;
+    if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_')) {
+      alert('Website not configured: missing Apps Script URL. Set WEB_APP_URL in index.html.');
+      return;
     }
-    if (!window.__latestBlob) { alert('Record something first.'); return; }
+    if (!window.__latestBlob) {
+      alert('Record something first.');
+      return;
+    }
+
+    uploadBtn.disabled = true;
+    const originalText = uploadBtn.textContent;
+    uploadBtn.textContent = 'Uploading…';
+
     const base64 = await blobToBase64(window.__latestBlob);
     const filename = window.__latestFilename || buildFilename();
-    await fetch(WEB_APP_URL, {
+
+    const res = await fetch(WEB_APP_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 })
     });
+
+    const raw = await res.text();
+    let data = null;
+    try { data = JSON.parse(raw); } catch (_) {}
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${res.statusText}\n${raw}`);
+    }
+    if (!data || data.ok !== true) {
+      const msg = data && data.error ? data.error : `Unexpected response: ${raw}`;
+      throw new Error(msg);
+    }
+
+    alert('Uploaded ✓\n' + (data.finalName || filename));
   } catch (e) {
     console.error('Upload failed:', e);
+    alert('Upload failed:\n' + e.message);
+  } finally {
+    uploadBtn.textContent = 'Upload';
+    uploadBtn.disabled = false;
   }
 });
 </script>
