@@ -91,7 +91,6 @@
 
 <script type="module">
 /* ===== CONFIG ===== */
-/* Tip: using the direct googleusercontent.com URL (from your Apps Script deployment details) can help Safari. */
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz4BwQs2SkQ8Z1C4bG33rDPn1nZG4g_wAvVPYI_soEVXMtNZNDNL0Qf6Szx9jpE__TNNw/exec';
 
 /* ===== State ===== */
@@ -123,17 +122,13 @@ function currentUserID() { const raw = (document.getElementById('userID').value 
 function currentGender() { const sel = document.querySelector('input[name="gender"]:checked'); const v = sel ? sel.value : 'X'; return (v === 'M' || v === 'F') ? v : 'X'; }
 function currentAge2() { const n = parseInt((document.getElementById('age').value || '').trim(), 10); if (isNaN(n) || n<0 || n>120) return '00'; return String(n).padStart(2,'0'); }
 function pad2(n){ return String(n).padStart(2,'0'); }
-function isSafari(){
-  const ua = navigator.userAgent;
-  return /^((?!chrome|android).)*safari/i.test(ua);
-}
 
 function startMeter(analyser){
   function tick(){
     const data = new Uint8Array(analyser.fftSize);
     analyser.getByteTimeDomainData(data);
     let sum = 0;
-    for (let i=0; i<data.length; i++){ const v=(data[i]-128)/128; sum += v*v; }
+    for (let i=0;i<data.length;i++){ const v=(data[i]-128)/128; sum += v*v; }
     const rms = Math.sqrt(sum/data.length);
     bar.style.width = Math.min(100, Math.round(rms*200)) + '%';
     meterRAF = requestAnimationFrame(tick);
@@ -232,6 +227,7 @@ async function setupAudio(){
 function buildFilename(){
   const user = currentUserID(), g = currentGender(), age = currentAge2();
   const d = new Date();
+  const pad2 = n => String(n).padStart(2,'0');
   const dd = pad2(d.getDate()), mm = pad2(d.getMonth()+1), yyyy = d.getFullYear();
   const hh = pad2(d.getHours()), mi = pad2(d.getMinutes()), ss = pad2(d.getSeconds());
   return `${user}_${g}_${age}_audio_${dd}_${mm}_${yyyy}_${hh}_${mi}_${ss}.wav`;
@@ -318,7 +314,7 @@ async function blobToBase64(blob){
   return btoa(binary);
 }
 
-/* ===== Safari-friendly upload with fallback ===== */
+/* ===== Safari-friendly upload (no preflight) + full error reporting ===== */
 uploadBtn.addEventListener('click', async () => {
   try{
     if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_')){
@@ -333,66 +329,19 @@ uploadBtn.addEventListener('click', async () => {
     const base64 = await blobToBase64(window.__latestBlob);
     const filename = window.__latestFilename || buildFilename();
 
-    // First attempt: normal CORS (works in Chrome and most Safari setups)
-    const tryStandard = async () => {
-      const res = await fetch(WEB_APP_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // simple request, avoids preflight
-        body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 }),
-        redirect: 'follow',
-        referrerPolicy: 'no-referrer',
-        keepalive: true
-      });
-      // If Safari blocks CORS, this might still be OK but reading body could fail.
-      const raw = await res.text().catch(() => null);
-      let data = null;
-      try { data = raw ? JSON.parse(raw) : null; } catch(_){}
-      if (res.ok && data && data.ok === true) {
-        return { ok: true, finalName: data.finalName || filename, soft: false };
-      }
-      if (res.ok && !raw && isSafari()) {
-        // Body unreadable due to CORS, but request likely delivered.
-        return { ok: true, finalName: filename, soft: true };
-      }
-      const msg = data && data.error ? data.error : (raw || `HTTP ${res.status} ${res.statusText}`);
-      throw new Error(msg);
-    };
+    const res = await fetch(WEB_APP_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoid CORS preflight in Safari
+      body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 }),
+      redirect: 'follow'
+    });
 
-    // Safari fallback: no-cors (opaque response). We can’t read the body but the upload reaches the server.
-    const tryNoCors = async () => {
-      const res = await fetch(WEB_APP_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // still simple
-        body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 }),
-        keepalive: true
-      });
-      // res.type === 'opaque' here if sent; treat as success
-      return { ok: true, finalName: filename, soft: true };
-    };
+    const raw = await res.text();
+    let data = null; try { data = JSON.parse(raw); } catch(_){}
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}\n${raw}`);
+    if (!data || data.ok !== true) throw new Error(data && data.error ? data.error : `Unexpected response: ${raw}`);
 
-    let result;
-    try {
-      result = await tryStandard();
-    } catch (e1) {
-      if (isSafari()) {
-        // Retry with no-cors; best-effort success
-        result = await tryNoCors();
-      } else {
-        throw e1;
-      }
-    }
-
-    if (result.ok) {
-      if (result.soft) {
-        alert('Sent ✓\n(Safari limited the response; check Drive for the new file)\n' + result.finalName);
-      } else {
-        alert('Uploaded ✓\n' + result.finalName);
-      }
-    } else {
-      throw new Error('Unknown upload error');
-    }
-
+    alert('Uploaded ✓\n' + (data.finalName || filename));
   } catch (e){
     console.error('Upload failed:', e);
     alert('Upload failed:\n' + e.message);
