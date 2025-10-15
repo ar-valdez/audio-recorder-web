@@ -21,7 +21,7 @@
     padding: 1.25rem 1.25rem 1.5rem; box-shadow: 0 4px 30px rgba(0,0,0,.04);
   }
 
-  /* ===== Centered header (green box) ===== */
+  /* Centered header */
   .app-header { text-align: center; margin-bottom: .75rem; }
   .app-header h1 { margin: .25rem 0 .25rem; font-size: clamp(1.2rem, 1.1rem + 1.2vw, 1.9rem); }
   .app-header p.lead { margin: 0; color:#4b5563; }
@@ -46,6 +46,9 @@
   .options { display:flex; align-items:center; gap:.8rem; }
   .options label { display:flex; align-items:center; gap:.25rem; cursor:pointer; }
   #countdown { min-width: 4ch; text-align: right; }
+
+  /* Instruction line */
+  .instruction { margin-top: .25rem; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -70,6 +73,9 @@
     <label class="formlabel" for="age">Age:</label>
     <input id="age" type="number" placeholder="00" min="0" max="120" step="1" />
   </div>
+
+  <!-- The ONLY instruction (bold) -->
+  <p class="instruction"><strong>Hit Start Recording and Say MAAAAAAAAAAAAAAAAAAAP, upload when finished.</strong></p>
 
   <div class="row" aria-label="controls">
     <button id="recordToggleBtn">Start recording</button>
@@ -103,10 +109,9 @@
 </main>
 
 <script type="module">
-/* ===== Customize the centered header text here ===== */
-const APP_TITLE    = 'We record your voice - WAV (Stereo)'; // <- change this
+/* ===== Optional: customize header text ===== */
+const APP_TITLE    = 'TalkingSick recording — WAV (Stereo)';
 const APP_SUBTITLE = 'Filename: <code>userID_G_AGE_audio_dd_mm_yyyy_hh_mm_ss.wav</code> • Channels: <strong>2</strong> • Max length: <strong>10s</strong>';
-
 document.getElementById('appTitle').textContent = APP_TITLE;
 document.getElementById('appSubtitle').innerHTML = APP_SUBTITLE;
 
