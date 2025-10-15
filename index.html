@@ -9,12 +9,23 @@
 <style>
   :root { --w: 880px; }
   html,body { height: 100%; }
-  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 2.5rem 1rem; display: grid; place-items: start center; background: #fafafa; color:#111; }
-  main { width: min(var(--w), 100%); background: white; border: 1px solid #e5e5e5; border-radius: 12px;
-         padding: 1.25rem 1.25rem 1.5rem; box-shadow: 0 4px 30px rgba(0,0,0,.04); }
-  h1 { margin: .25rem 0 .25rem; font-size: clamp(1.2rem, 1.1rem + 1.2vw, 1.9rem); }
-  p.lead { margin: 0 0 .75rem; color:#4b5563; }
+  body {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    margin: 0; padding: 2.5rem 1rem;
+    display: grid; place-items: start center;
+    background: #fafafa; color:#111;
+  }
+  main {
+    width: min(var(--w), 100%);
+    background: white; border: 1px solid #e5e5e5; border-radius: 12px;
+    padding: 1.25rem 1.25rem 1.5rem; box-shadow: 0 4px 30px rgba(0,0,0,.04);
+  }
+
+  /* ===== Centered header (green box) ===== */
+  .app-header { text-align: center; margin-bottom: .75rem; }
+  .app-header h1 { margin: .25rem 0 .25rem; font-size: clamp(1.2rem, 1.1rem + 1.2vw, 1.9rem); }
+  .app-header p.lead { margin: 0; color:#4b5563; }
+
   .row { display:flex; align-items:center; gap:.6rem; margin:.75rem 0; flex-wrap:wrap; }
   .col { display:flex; flex-direction:column; gap:.6rem; }
   button, .button { appearance: none; border: 0; background:#1f6feb; color:white; padding:.6rem .95rem;
@@ -31,7 +42,6 @@
   input[type="number"], input[type="text"] { padding:.5rem .6rem; border:1px solid #d1d5db; border-radius:8px; }
   input#userID { width: 100px; text-transform: uppercase; }
   .hr { height:1px; background: repeating-linear-gradient(90deg,#e5e7eb, #e5e7eb 8px, transparent 8px, transparent 16px); margin: 1rem 0; }
-  footer { margin-top: .5rem; font-size:.9rem; color:#555; display:flex; justify-content:space-between; gap:.5rem; flex-wrap:wrap; }
   .formlabel { font-size:.9rem; color:#374151; }
   .options { display:flex; align-items:center; gap:.8rem; }
   .options label { display:flex; align-items:center; gap:.25rem; cursor:pointer; }
@@ -40,8 +50,13 @@
 </head>
 <body>
 <main>
-  <h1>Audio Recorder — WAV (Stereo)</h1>
-  <p class="lead">Filename: <code>userID_G_AGE_audio_dd_mm_yyyy_hh_mm_ss.wav</code> • Channels: <strong>2</strong> • Max length: <strong>10s</strong></p>
+  <!-- Centered header -->
+  <div class="app-header">
+    <h1 id="appTitle">Audio Recorder — WAV (Stereo)</h1>
+    <p id="appSubtitle" class="lead">
+      Filename: <code>userID_G_AGE_audio_dd_mm_yyyy_hh_mm_ss.wav</code> • Channels: <strong>2</strong> • Max length: <strong>10s</strong>
+    </p>
+  </div>
 
   <div class="row" aria-label="metadata">
     <label class="formlabel" for="userID">User ID (A123):</label>
@@ -85,15 +100,17 @@
   <div class="col" aria-label="drive-upload">
     <button id="uploadBtn" disabled>Upload</button>
   </div>
-
-  <footer>
-    <span>Built with <code>getUserMedia</code> + <code>AudioWorklet</code>/<code>ScriptProcessor</code>. Exports <code>audio/wav</code> (stereo).</span>
-    <span><a href="README.md">Setup guide</a></span>
-  </footer>
 </main>
 
 <script type="module">
-/* ===== CONFIG ===== */
+/* ===== Customize the centered header text here ===== */
+const APP_TITLE    = 'We record your voice - WAV (Stereo)'; // <- change this
+const APP_SUBTITLE = 'Filename: <code>userID_G_AGE_audio_dd_mm_yyyy_hh_mm_ss.wav</code> • Channels: <strong>2</strong> • Max length: <strong>10s</strong>';
+
+document.getElementById('appTitle').textContent = APP_TITLE;
+document.getElementById('appSubtitle').innerHTML = APP_SUBTITLE;
+
+/* ===== CONFIG (Drive upload endpoint) ===== */
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz4BwQs2SkQ8Z1C4bG33rDPn1nZG4g_wAvVPYI_soEVXMtNZNDNL0Qf6Szx9jpE__TNNw/exec';
 
 /* ===== State ===== */
@@ -172,7 +189,7 @@ function writeWavHeader(view, sr, numFrames, numChannels = 2, bitsPerSample = 16
   w(view, 0, 'RIFF'); view.setUint32(4, 36 + dataSize, true);
   w(view, 8, 'WAVE');
   w(view,12, 'fmt '); view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);                 // PCM
+  view.setUint16(20, 1, true);
   view.setUint16(22, numChannels, true);
   view.setUint32(24, sr, true);
   view.setUint32(28, byteRate, true);
@@ -215,8 +232,7 @@ async function setupAudio(){
   src.connect(analyser);
   startMeter(analyser);
 
-  leftBuffers = [];
-  rightBuffers = [];
+  leftBuffers = []; rightBuffers = [];
 
   if (audioCtx.audioWorklet) {
     try {
@@ -260,14 +276,17 @@ function buildFilename(){
 }
 
 async function setPlayerSource(url){
-  // Fully reset then set and try to play
   try { player.pause(); } catch {}
-  player.removeAttribute('src'); player.load();  // hard reset for some browsers
+  player.removeAttribute('src'); player.load();
   player.srcObject = null;
-  player.src = url;
-  player.load();
-  try { await player.play(); } catch { /* user can click preview/play */ }
-  previewBtn.disabled = false;
+  if (url) {
+    player.src = url;
+    player.load();
+    try { await player.play(); } catch {}
+    previewBtn.disabled = false;
+  } else {
+    previewBtn.disabled = true;
+  }
 }
 
 function finalizeRecording(){
@@ -296,8 +315,7 @@ function startRecording(){
   recordBtn.disabled = false;
   resetBtn.disabled = false;
   uploadBtn.disabled = true;
-  previewBtn.disabled = true;
-  setPlayerSource(''); // clear previous source
+  setPlayerSource('');
   stopTimer = setTimeout(()=>{ if(recording) stopRecording(); }, Math.ceil(MAX_SECONDS*1000));
 }
 function stopRecording(){
@@ -314,8 +332,6 @@ recordBtn.addEventListener('click', async () => {
   try{
     if (!recording){
       recordBtn.disabled = true;
-      player.removeAttribute('src'); player.srcObject = null; player.load();
-      link.href = ''; sizeHint.textContent = '';
       await setupAudio();
       if (audioCtx.state === 'suspended') await audioCtx.resume();
       startRecording();
@@ -339,25 +355,22 @@ resetBtn.addEventListener('click', () => {
   stopMeter();
   leftBuffers = []; rightBuffers = [];
   window.__latestBlob = null; window.__latestFilename = null;
-  player.removeAttribute('src'); player.srcObject = null; player.load();
+  setPlayerSource('');
   link.href = ''; sizeHint.textContent = '';
   setStatus('idle');
   recordBtn.disabled = false; recordBtn.textContent = 'Start recording';
-  resetBtn.disabled = true; uploadBtn.disabled = true; previewBtn.disabled = true;
+  resetBtn.disabled = true; uploadBtn.disabled = true;
 });
 
 document.getElementById('previewBtn').addEventListener('click', async () => {
-  try { await player.play(); } catch (e) { alert('Press the Play control on the audio bar to listen.'); }
+  try { await player.play(); } catch { alert('Press Play on the audio bar to listen.'); }
 });
 
 player.addEventListener('error', () => {
   const err = player.error;
   if (!err) return;
-  const map = {
-    1: 'MEDIA_ERR_ABORTED', 2: 'MEDIA_ERR_NETWORK',
-    3: 'MEDIA_ERR_DECODE', 4: 'MEDIA_ERR_SRC_NOT_SUPPORTED'
-  };
-  alert('Playback error: ' + (map[err.code] || 'UNKNOWN') + (err.message ? ('\n' + err.message) : ''));
+  const map = {1:'MEDIA_ERR_ABORTED',2:'MEDIA_ERR_NETWORK',3:'MEDIA_ERR_DECODE',4:'MEDIA_ERR_SRC_NOT_SUPPORTED'};
+  alert('Playback error: ' + (map[err.code] || 'UNKNOWN'));
 });
 
 async function blobToBase64(blob){
@@ -372,9 +385,7 @@ async function blobToBase64(blob){
 // Upload (Safari-friendly: text/plain avoids preflight; fine on Chrome)
 uploadBtn.addEventListener('click', async () => {
   try{
-    if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_')){
-      alert('Website not configured: missing Apps Script URL.'); return;
-    }
+    if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_')){ alert('Website not configured: missing Apps Script URL.'); return; }
     if (!window.__latestBlob){ alert('Record something first.'); return; }
 
     uploadBtn.disabled = true;
