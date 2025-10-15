@@ -89,14 +89,11 @@
   </footer>
 </main>
 
-<!-- ***** All JavaScript is inside this script tag ***** -->
 <script type="module">
-// === CONFIG: paste your Apps Script Web App URL here ===
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz4BwQs2SkQ8Z1C4bG33rDPn1nZG4g_wAvVPYI_soEVXMtNZNDNL0Qf6Szx9jpE__TNNw/exec';
-// =======================================================
 
 let audioCtx, stream, meterRAF;
-let leftBuffers = [];  // mono accumulation (Float32)
+let leftBuffers = [];
 let sampleRate = 48000;
 let recording = false;
 let stopTimer = null;
@@ -118,151 +115,63 @@ const countdown = document.getElementById('countdown');
 
 function setStatus(s) { statusEl.textContent = s; }
 function setSr() { srEl.textContent = 'SampleRate: ' + sampleRate + ' Hz'; }
+function currentUserID() { const raw = (document.getElementById('userID').value || '').trim().toUpperCase(); return /^[A-Z][0-9]{3}$/.test(raw) ? raw : 'U000'; }
+function currentGender() { const sel = document.querySelector('input[name="gender"]:checked'); const v = sel ? sel.value : 'X'; return (v === 'M' || v === 'F') ? v : 'X'; }
+function currentAge2() { const n = parseInt((document.getElementById('age').value || '').trim(), 10); if (isNaN(n) || n<0 || n>120) return '00'; return String(n).padStart(2,'0'); }
 
-function currentUserID() {
-  const raw = (document.getElementById('userID').value || '').trim().toUpperCase();
-  return /^[A-Z][0-9]{3}$/.test(raw) ? raw : 'U000';
-}
-function currentGender() {
-  const sel = document.querySelector('input[name="gender"]:checked');
-  const v = sel ? sel.value : 'X';
-  return (v === 'M' || v === 'F') ? v : 'X';
-}
-function currentAge2() {
-  const n = parseInt((document.getElementById('age').value || '').trim(), 10);
-  if (isNaN(n) || n < 0 || n > 120) return '00';
-  return String(n).padStart(2, '0');
-}
+function startMeter(analyser){function t(){const d=new Uint8Array(analyser.fftSize);analyser.getByteTimeDomainData(d);let s=0;for(let i=0;i<d.length;i++){const v=(d[i]-128)/128;s+=v*v;}const rms=Math.sqrt(s/d.length);bar.style.width=Math.min(100,Math.round(rms*200))+'%';meterRAF=requestAnimationFrame(t);}t();}
+function stopMeter(){ if(meterRAF) cancelAnimationFrame(meterRAF); }
 
-function startMeter(analyser) {
-  function tick() {
-    const data = new Uint8Array(analyser.fftSize);
-    analyser.getByteTimeDomainData(data);
-    let sum = 0;
-    for (let i=0; i<data.length; i++) {
-      const v = (data[i] - 128) / 128;
-      sum += v*v;
-    }
-    const rms = Math.sqrt(sum / data.length);
-    bar.style.width = Math.min(100, Math.round(rms * 200)) + '%';
-    meterRAF = requestAnimationFrame(tick);
-  }
-  tick();
-}
-function stopMeter() { if (meterRAF) cancelAnimationFrame(meterRAF); }
+function interleaveMono(buffers){const len=buffers.reduce((a,b)=>a+b.length,0);const out=new Float32Array(len);let off=0;for(const b of buffers){out.set(b,off);off+=b.length;}return out;}
+function floatTo16BitPCM(f){const v=new DataView(new ArrayBuffer(f.length*2));let o=0;for(let i=0;i<f.length;i++,o+=2){let s=Math.max(-1,Math.min(1,f[i]));v.setInt16(o,s<0?s*0x8000:s*0x7FFF,true);}return v;}
+function writeWavHeader(view, sr, n, ch=1, bits=16){function w(v,o,s){for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));}const align=ch*bits/8, rate=sr*align, size=n*align; w(view,0,'RIFF'); view.setUint32(4,36+size,true); w(view,8,'WAVE'); w(view,12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,ch,true); view.setUint32(24,sr,true); view.setUint32(28,rate,true); view.setUint16(32,align,true); view.setUint16(34,bits,true); w(view,36,'data'); view.setUint32(40,size,true);}
+function encodeWav(buffers,sr){const mono=interleaveMono(buffers);const pcm16=floatTo16BitPCM(mono);const header=new DataView(new ArrayBuffer(44));writeWavHeader(header,sr,mono.length,1,16);const wav=new Uint8Array(44+pcm16.byteLength);wav.set(new Uint8Array(header.buffer),0);wav.set(new Uint8Array(pcm16.buffer),44);return new Blob([wav],{type:'audio/wav'});}
 
-function interleaveMono(buffers) {
-  const length = buffers.reduce((a,b)=>a+b.length, 0);
-  const out = new Float32Array(length);
-  let offset = 0;
-  for (const b of buffers) { out.set(b, offset); offset += b.length; }
-  return out;
-}
-function floatTo16BitPCM(float32) {
-  const out = new DataView(new ArrayBuffer(float32.length * 2));
-  let offset = 0;
-  for (let i=0; i<float32.length; i++, offset+=2) {
-    let s = Math.max(-1, Math.min(1, float32[i]));
-    out.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-  }
-  return out;
-}
-function writeWavHeader(view, sampleRate, numSamples, numChannels = 1, bitsPerSample = 16) {
-  function writeString(view, offset, str) { for (let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); }
-  const blockAlign = numChannels * bitsPerSample/8;
-  const byteRate = sampleRate * blockAlign;
-  const dataSize = numSamples * blockAlign;
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, dataSize, true);
-}
-function encodeWav(buffers, sampleRate) {
-  const mono = interleaveMono(buffers);
-  const pcm16 = floatTo16BitPCM(mono);
-  const header = new DataView(new ArrayBuffer(44));
-  writeWavHeader(header, sampleRate, mono.length, 1, 16);
-  const wavBytes = new Uint8Array(44 + pcm16.byteLength);
-  wavBytes.set(new Uint8Array(header.buffer), 0);
-  wavBytes.set(new Uint8Array(pcm16.buffer), 44);
-  return new Blob([wavBytes], { type: 'audio/wav' });
-}
+function updateCountdown(){ if(!recording){countdown.textContent=MAX_SECONDS.toFixed(1)+'s';return;} const elapsed=(performance.now()-startTs)/1000; const left=Math.max(0,MAX_SECONDS-elapsed); countdown.textContent=left.toFixed(1)+'s'; countdownRAF=requestAnimationFrame(updateCountdown); }
 
-function updateCountdown() {
-  if (!recording) { countdown.textContent = MAX_SECONDS.toFixed(1)+'s'; return; }
-  const elapsed = (performance.now() - startTs) / 1000;
-  const left = Math.max(0, MAX_SECONDS - elapsed);
-  countdown.textContent = left.toFixed(1) + 's';
-  countdownRAF = requestAnimationFrame(updateCountdown);
-}
-
-async function setupAudio() {
+async function setupAudio(){
   const AC = window.AudioContext || window.webkitAudioContext;
-  audioCtx = new AC();
-  sampleRate = audioCtx.sampleRate;
-  setSr();
-
-  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  audioCtx = new AC(); sampleRate = audioCtx.sampleRate; setSr();
+  stream = await navigator.mediaDevices.getUserMedia({ audio:true });
   const src = audioCtx.createMediaStreamSource(stream);
-
-  const analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 2048;
-  src.connect(analyser);
-  startMeter(analyser);
-
+  const analyser = audioCtx.createAnalyser(); analyser.fftSize=2048; src.connect(analyser); startMeter(analyser);
   leftBuffers = [];
   if (audioCtx.audioWorklet) {
     try {
       await audioCtx.audioWorklet.addModule('recorder-worklet.js');
-      const node = new AudioWorkletNode(audioCtx, 'wav-recorder-processor');
+      const node = new AudioWorkletNode(audioCtx,'wav-recorder-processor');
       src.connect(node);
-      node.port.onmessage = (e) => {
+      node.port.onmessage = e => {
         if (!recording) return;
         if (e.data && e.data.type === 'chunk') {
           leftBuffers.push(new Float32Array(e.data.samples));
-          const seconds = leftBuffers.reduce((acc,b)=>acc+b.length,0) / sampleRate;
-          sizeHint.textContent = 'Length: ' + seconds.toFixed(1) + ' s';
+          const secs = leftBuffers.reduce((acc,b)=>acc+b.length,0)/sampleRate;
+          sizeHint.textContent = 'Length: ' + secs.toFixed(1) + ' s';
         }
       };
       return;
-    } catch (e) {
-      console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e);
-    }
+    } catch (e) { console.warn('AudioWorklet failed, using ScriptProcessor:', e); }
   }
-  const sp = audioCtx.createScriptProcessor(4096, 1, 1);
-  src.connect(sp);
-  sp.connect(audioCtx.destination);
-  sp.onaudioprocess = (ev) => {
+  const sp = audioCtx.createScriptProcessor(4096,1,1);
+  src.connect(sp); sp.connect(audioCtx.destination);
+  sp.onaudioprocess = ev => {
     if (!recording) return;
     const input = ev.inputBuffer.getChannelData(0);
     leftBuffers.push(new Float32Array(input));
-    const seconds = leftBuffers.reduce((acc,b)=>acc+b.length,0) / sampleRate;
-    sizeHint.textContent = 'Length: ' + seconds.toFixed(1) + ' s';
+    const secs = leftBuffers.reduce((acc,b)=>acc+b.length,0)/sampleRate;
+    sizeHint.textContent = 'Length: ' + secs.toFixed(1) + ' s';
   };
 }
 
 function pad2(n){ return String(n).padStart(2,'0'); }
-function buildFilename() {
-  const user = currentUserID();      // A123 or U000
-  const g = currentGender();         // M/F/X
-  const age = currentAge2();         // 00..99
-  const d = new Date();
-  const dd = pad2(d.getDate()), mm = pad2(d.getMonth()+1), yyyy = d.getFullYear();
-  const hh = pad2(d.getHours()), mi = pad2(d.getMinutes()), ss = pad2(d.getSeconds());
-  const stamp = `${dd}_${mm}_${yyyy}_${hh}_${mi}_${ss}`;
-  return `${user}_${g}_${age}_audio_${stamp}.wav`;
+function buildFilename(){
+  const user=currentUserID(), g=currentGender(), age=currentAge2();
+  const d=new Date(); const dd=pad2(d.getDate()), mm=pad2(d.getMonth()+1), yyyy=d.getFullYear();
+  const hh=pad2(d.getHours()), mi=pad2(d.getMinutes()), ss=pad2(d.getSeconds());
+  return `${user}_${g}_${age}_audio_${dd}_${mm}_${yyyy}_${hh}_${mi}_${ss}.wav`;
 }
 
-function finalizeRecording() {
+function finalizeRecording(){
   setStatus('encoding…');
   if (stream) stream.getTracks().forEach(t=>t.stop());
   stopMeter();
@@ -270,145 +179,98 @@ function finalizeRecording() {
   const url = URL.createObjectURL(blob);
   player.src = url;
   const filename = buildFilename();
-  link.href = url;
-  link.download = filename;
+  link.href = url; link.download = filename;
   sizeHint.textContent = 'Size: ' + (blob.size/1024/1024).toFixed(2) + ' MB';
   setStatus('ready');
-  recordBtn.disabled = false;
-  recordBtn.textContent = 'Start recording';
-  resetBtn.disabled = false;
-  uploadBtn.disabled = false;
-  window.__latestBlob = blob;
-  window.__latestFilename = filename;
+  recordBtn.disabled = false; recordBtn.textContent = 'Start recording';
+  resetBtn.disabled = false; uploadBtn.disabled = false;
+  window.__latestBlob = blob; window.__latestFilename = filename;
 }
 
-function startRecording() {
-  recording = true;
-  leftBuffers = [];
-  startTs = performance.now();
-  updateCountdown();
-  setStatus('recording…');
-  recordBtn.textContent = 'Stop recording';
-  recordBtn.disabled = false;      // keep enabled so user can stop
-  resetBtn.disabled = false;
-  uploadBtn.disabled = true;
-
-  // Hard cap at 10s
-  stopTimer = setTimeout(() => {
-    if (recording) stopRecording();
-  }, Math.ceil(MAX_SECONDS * 1000));
+function startRecording(){
+  recording = true; leftBuffers = []; startTs = performance.now();
+  updateCountdown(); setStatus('recording…');
+  recordBtn.textContent = 'Stop recording'; recordBtn.disabled = false;
+  resetBtn.disabled = false; uploadBtn.disabled = true;
+  stopTimer = setTimeout(()=>{ if(recording) stopRecording(); }, Math.ceil(MAX_SECONDS*1000));
 }
-
-function stopRecording() {
+function stopRecording(){
   if (!recording) return;
   recording = false;
-  if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
+  if (stopTimer) { clearTimeout(stopTimer); stopTimer=null; }
   if (countdownRAF) cancelAnimationFrame(countdownRAF);
-  countdown.textContent = MAX_SECONDS.toFixed(1) + 's';
+  countdown.textContent = MAX_SECONDS.toFixed(1)+'s';
   finalizeRecording();
 }
 
 recordBtn.addEventListener('click', async () => {
   try {
     if (!recording) {
-      // start
-      recordBtn.disabled = true;     // briefly disable to avoid double-click race
-      player.src = ''; link.href = ''; sizeHint.textContent = '';
+      recordBtn.disabled = true;
+      player.src=''; link.href=''; sizeHint.textContent='';
       await setupAudio();
       if (audioCtx.state === 'suspended') await audioCtx.resume();
       startRecording();
     } else {
-      // stop early (shorter than 10s)
       stopRecording();
     }
   } catch (e) {
     console.error(e);
     setStatus('permission denied or unavailable');
     alert('Microphone access failed. Check browser permissions and HTTPS.');
-    recordBtn.disabled = false;
-    recordBtn.textContent = 'Start recording';
-    resetBtn.disabled = true;
+    recordBtn.disabled=false; recordBtn.textContent='Start recording'; resetBtn.disabled=true;
   }
 });
 
 resetBtn.addEventListener('click', () => {
-  // Cancel and clear UI (discard the take)
-  if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
+  if (stopTimer) { clearTimeout(stopTimer); stopTimer=null; }
   if (countdownRAF) cancelAnimationFrame(countdownRAF);
-  countdown.textContent = MAX_SECONDS.toFixed(1) + 's';
-  recording = false;
+  countdown.textContent = MAX_SECONDS.toFixed(1)+'s';
+  recording=false;
   try { if (stream) stream.getTracks().forEach(t=>t.stop()); } catch {}
-  stopMeter();
-  leftBuffers = [];
-  window.__latestBlob = null;
-  window.__latestFilename = null;
-  player.src = ''; link.href = ''; sizeHint.textContent = '';
-  setStatus('idle');
-  recordBtn.disabled = false;
-  recordBtn.textContent = 'Start recording';
-  resetBtn.disabled = true;
-  uploadBtn.disabled = true;
+  stopMeter(); leftBuffers=[]; window.__latestBlob=null; window.__latestFilename=null;
+  player.src=''; link.href=''; sizeHint.textContent='';
+  setStatus('idle'); recordBtn.disabled=false; recordBtn.textContent='Start recording';
+  resetBtn.disabled=true; uploadBtn.disabled=true;
 });
 
-async function blobToBase64(blob) {
+async function blobToBase64(blob){
   const buf = await blob.arrayBuffer();
-  let binary = '';
-  const bytes = new Uint8Array(buf);
-  const chunk = 0x8000;
-  for (let i=0; i<bytes.length; i+=chunk) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
-  }
+  let binary = ''; const bytes = new Uint8Array(buf); const chunk=0x8000;
+  for (let i=0;i<bytes.length;i+=chunk) binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
   return btoa(binary);
 }
 
-/* ===== Improved upload with full error reporting ===== */
+// Safari-friendly upload: text/plain to avoid preflight
 uploadBtn.addEventListener('click', async () => {
   try {
-    if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_')) {
-      alert('Website not configured: missing Apps Script URL. Set WEB_APP_URL in index.html.');
-      return;
-    }
-    if (!window.__latestBlob) {
-      alert('Record something first.');
-      return;
-    }
+    if (!WEB_APP_URL || WEB_APP_URL.includes('PASTE_')) { alert('Website not configured: missing Apps Script URL.'); return; }
+    if (!window.__latestBlob) { alert('Record something first.'); return; }
 
-    uploadBtn.disabled = true;
-    const originalText = uploadBtn.textContent;
-    uploadBtn.textContent = 'Uploading…';
+    uploadBtn.disabled = true; const original = uploadBtn.textContent; uploadBtn.textContent='Uploading…';
 
     const base64 = await blobToBase64(window.__latestBlob);
     const filename = window.__latestFilename || buildFilename();
 
     const res = await fetch(WEB_APP_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 })
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 }),
+      redirect: 'follow'
     });
 
-    const raw = await res.text();
-    let data = null;
-    try { data = JSON.parse(raw); } catch (_) {}
-
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} ${res.statusText}\n${raw}`);
-    }
-    if (!data || data.ok !== true) {
-      const msg = data && data.error ? data.error : `Unexpected response: ${raw}`;
-      throw new Error(msg);
-    }
+    const raw = await res.text(); let data=null; try { data = JSON.parse(raw); } catch(_){}
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}\n${raw}`);
+    if (!data || data.ok !== true) throw new Error(data && data.error ? data.error : `Unexpected response: ${raw}`);
 
     alert('Uploaded ✓\n' + (data.finalName || filename));
   } catch (e) {
     console.error('Upload failed:', e);
     alert('Upload failed:\n' + e.message);
   } finally {
-    uploadBtn.textContent = 'Upload';
-    uploadBtn.disabled = false;
+    uploadBtn.textContent='Upload'; uploadBtn.disabled=false;
   }
 });
 </script>
-<!-- ***** End of script ***** -->
-
 </body>
 </html>
