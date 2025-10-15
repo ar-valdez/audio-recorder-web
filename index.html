@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Audio Recorder — WAV Only</title>
-<meta name="description" content="Record WAV (10s max) and upload to Google Drive. Filename uses userID+gender+age+timestamp. Reset cancels; single Upload button." />
+<meta name="description" content="Record WAV (10s max) and upload to Google Drive. Start/Stop toggle, optional Reset. Filename uses userID+gender+age+timestamp." />
 <link rel="icon" href="data:,">
 <style>
   :root { --w: 880px; }
@@ -42,7 +42,7 @@
 <body>
 <main>
   <h1>Audio Recorder — WAV Only</h1>
-  <p class="lead">Filename: <code>userID_G_AGE_audio_dd_mm_yyyy_hh_mm_ss.wav</code> • Max length: <strong>10s</strong></p>
+  <p class="lead">Filename: <code>userID_G_AGE_audio_dd_mm_yyyy_hh_mm_ss.wav</code> • Max length: <strong>10s</strong> (you can stop earlier)</p>
 
   <div class="row" aria-label="metadata">
     <label class="formlabel" for="userID">User ID (A123):</label>
@@ -58,7 +58,7 @@
   </div>
 
   <div class="row" aria-label="controls">
-    <button id="recordBtn">Start recording</button>
+    <button id="recordToggleBtn">Start recording</button>
     <button id="resetBtn" class="danger" disabled>Reset</button>
     <span id="status" class="pill">idle</span>
     <span id="sr" class="pill"></span>
@@ -81,7 +81,7 @@
   <div class="hr" role="separator"></div>
 
   <div class="col" aria-label="drive-upload">
-    <button id="uploadBtn">Upload</button>
+    <button id="uploadBtn" disabled>Upload</button>
   </div>
 
   <footer>
@@ -90,13 +90,12 @@
   </footer>
 </main>
 
-<script type="module">
 // === CONFIG: paste your Apps Script Web App URL here ===
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz4BwQs2SkQ8Z1C4bG33rDPn1nZG4g_wAvVPYI_soEVXMtNZNDNL0Qf6Szx9jpE__TNNw/exec';
 // =======================================================
 
 let audioCtx, stream, meterRAF, workletNode, scriptNode, sourceNode;
-let leftBuffers = [];  // mono buffers
+let leftBuffers = [];  // mono accumulation (Float32)
 let sampleRate = 48000;
 let recording = false;
 let stopTimer = null;
@@ -105,7 +104,7 @@ let startTs = 0;
 
 const MAX_SECONDS = 10.0;
 
-const recordBtn = document.getElementById('recordBtn');
+const recordBtn = document.getElementById('recordToggleBtn');
 const resetBtn  = document.getElementById('resetBtn');
 const statusEl  = document.getElementById('status');
 const srEl      = document.getElementById('sr');
@@ -212,20 +211,20 @@ async function setupAudio() {
   setSr();
 
   stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const sourceNode = audioCtx.createMediaStreamSource(stream);
+  const src = audioCtx.createMediaStreamSource(stream);
 
   const analyser = audioCtx.createAnalyser();
   analyser.fftSize = 2048;
-  sourceNode.connect(analyser);
+  src.connect(analyser);
   startMeter(analyser);
 
   leftBuffers = [];
   if (audioCtx.audioWorklet) {
     try {
       await audioCtx.audioWorklet.addModule('recorder-worklet.js');
-      const workletNode = new AudioWorkletNode(audioCtx, 'wav-recorder-processor');
-      sourceNode.connect(workletNode);
-      workletNode.port.onmessage = (e) => {
+      const node = new AudioWorkletNode(audioCtx, 'wav-recorder-processor');
+      src.connect(node);
+      node.port.onmessage = (e) => {
         if (!recording) return;
         if (e.data && e.data.type === 'chunk') {
           leftBuffers.push(new Float32Array(e.data.samples));
@@ -233,22 +232,21 @@ async function setupAudio() {
           sizeHint.textContent = 'Length: ' + seconds.toFixed(1) + ' s';
         }
       };
-      return { sourceNode };
+      return;
     } catch (e) {
       console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e);
     }
   }
-  const scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
-  sourceNode.connect(scriptNode);
-  scriptNode.connect(audioCtx.destination);
-  scriptNode.onaudioprocess = (ev) => {
+  const sp = audioCtx.createScriptProcessor(4096, 1, 1);
+  src.connect(sp);
+  sp.connect(audioCtx.destination);
+  sp.onaudioprocess = (ev) => {
     if (!recording) return;
     const input = ev.inputBuffer.getChannelData(0);
     leftBuffers.push(new Float32Array(input));
     const seconds = leftBuffers.reduce((acc,b)=>acc+b.length,0) / sampleRate;
     sizeHint.textContent = 'Length: ' + seconds.toFixed(1) + ' s';
   };
-  return { sourceNode };
 }
 
 function pad2(n){ return String(n).padStart(2,'0'); }
@@ -276,41 +274,58 @@ function finalizeRecording() {
   sizeHint.textContent = 'Size: ' + (blob.size/1024/1024).toFixed(2) + ' MB';
   setStatus('ready');
   recordBtn.disabled = false;
+  recordBtn.textContent = 'Start recording';
   resetBtn.disabled = false;
   uploadBtn.disabled = false;
   window.__latestBlob = blob;
   window.__latestFilename = filename;
 }
 
+function startRecording() {
+  recording = true;
+  leftBuffers = [];
+  startTs = performance.now();
+  updateCountdown();
+  setStatus('recording…');
+  recordBtn.textContent = 'Stop recording';
+  recordBtn.disabled = false;      // keep enabled so user can stop
+  resetBtn.disabled = false;
+  uploadBtn.disabled = true;
+
+  // Hard cap at 10s
+  stopTimer = setTimeout(() => {
+    if (recording) stopRecording();
+  }, Math.ceil(MAX_SECONDS * 1000));
+}
+
+function stopRecording() {
+  if (!recording) return;
+  recording = false;
+  if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
+  if (countdownRAF) cancelAnimationFrame(countdownRAF);
+  countdown.textContent = MAX_SECONDS.toFixed(1) + 's';
+  finalizeRecording();
+}
+
 recordBtn.addEventListener('click', async () => {
   try {
-    recordBtn.disabled = true;
-    resetBtn.disabled = false;
-    uploadBtn.disabled = true;
-    player.src = ''; link.href = ''; sizeHint.textContent = '';
-
-    await setupAudio();
-    if (audioCtx.state === 'suspended') await audioCtx.resume();
-    recording = true;
-    leftBuffers = [];
-    startTs = performance.now();
-    updateCountdown();
-    setStatus('recording…');
-
-    // 10s hard stop
-    stopTimer = setTimeout(() => {
-      if (recording) {
-        recording = false;
-        if (countdownRAF) cancelAnimationFrame(countdownRAF);
-        countdown.textContent = MAX_SECONDS.toFixed(1) + 's';
-        finalizeRecording();
-      }
-    }, Math.ceil(MAX_SECONDS * 1000));
+    if (!recording) {
+      // start
+      recordBtn.disabled = true;     // briefly disable to avoid double-click race
+      player.src = ''; link.href = ''; sizeHint.textContent = '';
+      await setupAudio();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      startRecording();
+    } else {
+      // stop early (shorter than 10s)
+      stopRecording();
+    }
   } catch (e) {
     console.error(e);
     setStatus('permission denied or unavailable');
     alert('Microphone access failed. Check browser permissions and HTTPS.');
     recordBtn.disabled = false;
+    recordBtn.textContent = 'Start recording';
     resetBtn.disabled = true;
   }
 });
@@ -329,6 +344,7 @@ resetBtn.addEventListener('click', () => {
   player.src = ''; link.href = ''; sizeHint.textContent = '';
   setStatus('idle');
   recordBtn.disabled = false;
+  recordBtn.textContent = 'Start recording';
   resetBtn.disabled = true;
   uploadBtn.disabled = true;
 });
@@ -357,7 +373,7 @@ uploadBtn.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename, mimeType: 'audio/wav', data: base64 })
     });
-    // Button only; no status text here on purpose.
+    // Button only; no status text (per your earlier request).
   } catch (e) {
     console.error('Upload failed:', e);
   }
