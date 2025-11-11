@@ -352,19 +352,8 @@ recordBtn.addEventListener('click', async () => {
 });
 
 resetBtn.addEventListener('click', () => {
-  if (stopTimer){ clearTimeout(stopTimer); stopTimer = null; }
-  if (countdownRAF) cancelAnimationFrame(countdownRAF);
-  countdown.textContent = MAX_SECONDS.toFixed(1) + 's';
-  recording = false;
-  try { if (stream) stream.getTracks().forEach(t=>t.stop()); } catch {}
-  stopMeter();
-  leftBuffers = []; rightBuffers = [];
-  window.__latestBlob = null; window.__latestFilename = null;
-  setPlayerSource('');
-  link.href = ''; sizeHint.textContent = '';
-  setStatus('idle');
-  recordBtn.disabled = false; recordBtn.textContent = 'Start recording';
-  resetBtn.disabled = true; uploadBtn.disabled = true;
+  // Reload the page (same as pressing F5). Uses cache like a normal refresh.
+  window.location.reload();
 });
 
 document.getElementById('previewBtn').addEventListener('click', async () => {
