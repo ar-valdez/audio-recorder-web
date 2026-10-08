@@ -46,6 +46,9 @@
   .formlabel { font-size:.9rem; color:#374151; }
   .options { display:flex; align-items:center; gap:.8rem; }
   .options label { display:flex; align-items:center; gap:.25rem; cursor:pointer; }
+  input.link-prefilled { background:#eeeeee; color:#555; cursor:not-allowed; }
+  #genderOptions.link-prefilled { background:#eeeeee; color:#555; padding:.25rem .45rem; border-radius:8px; }
+  #genderOptions.link-prefilled label { color:#555; cursor:not-allowed; }
   #countdown { min-width: 4ch; text-align: right; }
 
   /* Instruction line */
@@ -65,7 +68,7 @@
   <div class="row" aria-label="metadata">
     <label class="formlabel" for="userID">User ID (A123):</label>
     <input id="userID" type="text" placeholder="A123" maxlength="4" pattern="[A-Za-z][0-9]{3}" aria-label="User ID one letter + three digits" autocomplete="off" />
-    <div class="options">
+    <div class="options" id="genderOptions">
       <span class="formlabel">Gender:</span>
       <label><input type="radio" name="gender" value="M" id="gM"> M</label>
       <label><input type="radio" name="gender" value="F" id="gF"> F</label>
@@ -187,10 +190,22 @@ function loadParticipantDetailsFromPath() {
     setStatus('check link or enter details');
     return;
   }
-  document.getElementById('userID').value = userID;
-  document.getElementById('age').value = String(age);
+  const userField = document.getElementById('userID');
+  const ageField = document.getElementById('age');
+  const genderOptions = document.getElementById('genderOptions');
+  userField.value = userID;
+  ageField.value = String(age);
   document.querySelector(`input[name="gender"][value="${gender}"]`).checked = true;
-  setStatus('details loaded from link');
+
+  // Link-provided values remain visible but cannot be edited by the participant.
+  userField.readOnly = true;
+  ageField.readOnly = true;
+  userField.classList.add('link-prefilled');
+  ageField.classList.add('link-prefilled');
+  genderOptions.classList.add('link-prefilled');
+  genderOptions.setAttribute('aria-disabled', 'true');
+  genderOptions.querySelectorAll('input[name="gender"]').forEach(input => { input.disabled = true; });
+  setStatus('details loaded from link (locked)');
 }
 
 function startMeter(analyser){
